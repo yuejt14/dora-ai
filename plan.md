@@ -20,20 +20,27 @@
 
 ### 1.1 Config & Provider
 
-- [ ] `backend/config.py` — settings, paths, env var loading (API keys from `.env` via `os.environ`)
+- [ ] `backend/config.py` — settings, paths, env var loading (install `python-dotenv`, load from `.env`)
 - [ ] `backend/providers/base.py` — `LLMProvider` ABC with `stream_chat(messages) -> AsyncIterator[str]`
 - [ ] `backend/providers/ollama.py` — Ollama provider via httpx (install `httpx`)
 - [ ] `backend/providers/router.py` — `ProviderRouter` (Ollama only for now)
 
 ### 1.2 Database
 
-- [ ] `backend/db/schema.sql` — `conversations`, `messages`, `settings` tables
-- [ ] `backend/db/database.py` — SQLite connection, migrations, query helpers
+- [ ] `backend/db/migrations/001_initial.sql` — `conversations`, `messages`, `settings`, `_migrations` tables
+- [ ] `backend/db/database.py` — SQLite connection (WAL mode), migration runner, query helpers
 
 ### 1.3 Integration
 
 - [ ] Wire provider + DB together: send message → stream response → persist both
+- [ ] Set up the asyncio bridge (dedicated event loop thread for async providers, callable from sync code)
 - [ ] CLI smoke test: multi-turn conversation, persisted and reloadable across restarts
+
+### 1.4 Tests
+
+- [ ] Install `pytest` as dev dependency
+- [ ] Unit tests for Ollama provider (mock httpx, verify streaming contract and error handling)
+- [ ] Unit tests for database (migrations apply cleanly, CRUD operations, WAL mode)
 
 ---
 
@@ -41,13 +48,15 @@
 
 **Goal:** Personality-driven responses via a middleware pipeline.
 
-- [ ] `backend/soul/definition.py` — `SoulDefinition` dataclass + YAML loader (install `pyyaml`, `pydantic`)
+- [ ] `backend/soul/definition.py` — `SoulDefinition` Pydantic model + YAML loader (install `pyyaml`, `pydantic`)
 - [ ] `souls/default.yaml` — default companion personality
 - [ ] `backend/soul/engine.py` — `SoulEngine` pre/post processing:
   - Pre: inject system prompt + conversation history
-  - Post: extract `[emotion:NAME]` tags, enforce response constraints
+  - Post: streaming emotion tag parser (handles split tags across chunks, defaults to `neutral`), enforce response constraints
 - [ ] `backend/soul/pipeline.py` — `ConversationPipeline` orchestrator tying providers + DB + soul together
+- [ ] Auto-generate conversation titles from first exchange (LLM summarization or first-message truncation)
 - [ ] CLI test: personality-flavored streamed responses with emotion tags parsed out
+- [ ] Unit tests for emotion tag parser (split tags, missing tags, malformed tags, multiple tags per chunk)
 
 ---
 
@@ -56,15 +65,17 @@
 **Goal:** The AI remembers facts about the user across conversations.
 
 - [ ] Install `sqlite-vec`
-- [ ] `backend/memory/embeddings.py` — Ollama `nomic-embed-text` embedding calls (install `httpx` if not yet added)
-- [ ] `backend/memory/extractor.py` — LLM-based fact extraction after each turn
+- [ ] `backend/db/migrations/002_add_memories.sql` — `memories` and `memory_vectors` tables
+- [ ] `backend/memory/embeddings.py` — Ollama `nomic-embed-text` embedding calls
+- [ ] `backend/memory/extractor.py` — LLM-based fact extraction (batched: triggers after 5+ unprocessed turns, on idle 30s+, or on conversation end — NOT every turn)
 - [ ] `backend/memory/manager.py` — `MemoryManager`:
   - Store facts with vector embeddings
   - Semantic search for relevant memories before each LLM call
   - Memory importance scoring
-- [ ] Add `memories` and `memory_vectors` tables to schema
+  - Fallback to SQL LIKE search if sqlite-vec fails to load
 - [ ] Integrate MemoryManager into ConversationPipeline (memory injection into prompts)
 - [ ] CLI test: tell AI a fact → new conversation → AI recalls it
+- [ ] Unit tests for memory retrieval accuracy (store facts, verify semantic search recalls them, test fallback search)
 
 ---
 
@@ -72,9 +83,13 @@
 
 **Goal:** Speak to the AI, hear it speak back — all in Python, no UI needed yet.
 
+### 4.0 Pre-flight
+
+- [ ] Verify `faster-whisper` installs on Python 3.14 (ctranslate2 wheels). If not, evaluate alternatives: `openai-whisper`, `whisper.cpp` Python bindings, or pin a working ctranslate2 build.
+
 ### 4.1 Speech-to-Text
 
-- [ ] Install `faster-whisper`, `torch`
+- [ ] Install `faster-whisper` (or chosen alternative), `torch`
 - [ ] `backend/voice/vad.py` — Silero VAD for silence filtering
 - [ ] `backend/voice/stt.py` — faster-whisper wrapper (CUDA float16, "small" model)
 - [ ] CLI test: record from mic → VAD → transcription → print text
@@ -101,6 +116,7 @@
 
 - [ ] Install `pywebview`
 - [ ] `backend/app.py` — pywebview entry point + `API` class exposing backend methods
+- [ ] Implement the batched event bus (`push_event` queue → main-thread `evaluate_js` drain loop)
 - [ ] Initialize frontend: Vite + React + TypeScript (install frontend deps here)
 - [ ] `scripts/dev.py` — dev mode runner (Vite + pywebview together)
 
@@ -159,7 +175,6 @@
 
 **Goal:** Production-ready desktop app.
 
-- [ ] `backend/plugins/base.py` + `loader.py` — plugin system
 - [ ] Soul editor UI
 - [ ] Memory browser/editor UI
 - [ ] Conversation management (rename, delete, search)
@@ -167,20 +182,27 @@
 - [ ] System tray integration
 - [ ] `scripts/download_models.py` — first-run model helper
 
+### Deferred (build only if needed)
+
+- [ ] `backend/plugins/base.py` + `loader.py` — plugin system (design this after the app works end-to-end, not before)
+
 ---
 
 ## Testing Strategy
 
-- Unit tests for providers (mock the API, verify streaming contract)
-- Integration test for ConversationPipeline (provider + DB + soul end-to-end)
-- Memory retrieval accuracy test (store facts, verify semantic search recalls them)
-- Tests run with `pytest`; add as a dev dependency when writing first test
+Tests are in-phase tasks (see each phase above), not a separate effort. Run with `pytest`.
+
+- **Phase 1:** Provider streaming contract (mock httpx), DB migrations + CRUD
+- **Phase 2:** Emotion tag parser (split chunks, missing tags, malformed), conversation pipeline integration
+- **Phase 3:** Memory retrieval accuracy (store facts, verify semantic search recalls them, test LIKE fallback)
+- **Phase 4:** VAD filtering, STT output format
+- **Phase 5+:** Manual testing via the UI; consider Playwright for pywebview if automated UI tests become necessary
 
 ---
 
 ## Notes
 
 - Each phase is testable via CLI before any UI exists (phases 1–4)
-- VRAM budget: ~1GB (faster-whisper small) + ~4-5GB (Ollama Q4 7-8B) = ~6GB of 8GB RTX 4070
+- Primary target is API models; local Ollama for dev/testing only
 - Keep Python backend testable without pywebview (plain classes, pywebview is just glue)
 - API keys loaded from environment variables (`.env` file, not committed)
