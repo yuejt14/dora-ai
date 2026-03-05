@@ -2,8 +2,9 @@
 
 ## Current State
 
-- Bare project scaffold: `main.py` (hello world), `pyproject.toml` with Python 3.14+, ruff
-- No backend, no frontend, no database, no UI
+- Phase 1.2 complete: SQLite database layer with migrations, query helpers, WAL mode
+- Phase 1.1 complete: config, LLM provider layer, Ollama streaming, structured logging
+- No frontend, no UI yet
 
 ## Rules
 
@@ -21,16 +22,16 @@
 
 ### 1.1 Config & Provider
 
-- [ ] `backend/config.py` — settings, paths, env var loading (install `python-dotenv`, `pydantic`; load from `.env`)
-- [ ] `backend/providers/base.py` — `LLMProvider` ABC with `stream_chat(messages) -> AsyncIterator[str]`
-- [ ] `backend/providers/ollama.py` — Ollama provider via httpx (install `httpx`)
-- [ ] `backend/providers/router.py` — `ProviderRouter` (Ollama only for now)
-- [ ] Set up `logging` configuration (structured output, per-module loggers)
+- [x] `backend/config.py` — settings, paths, env var loading (install `python-dotenv`, `pydantic`; load from `.env`)
+- [x] `backend/providers/base.py` — `LLMProvider` ABC with `stream_chat(messages) -> AsyncIterator[str]`
+- [x] `backend/providers/ollama.py` — Ollama provider via httpx (install `httpx`)
+- [x] `backend/providers/router.py` — `ProviderRouter` (Ollama only for now)
+- [x] Set up `logging` configuration (structured output, per-module loggers)
 
 ### 1.2 Database
 
-- [ ] `backend/db/migrations/001_initial.sql` — `conversations`, `messages`, `settings`, `_migrations` tables
-- [ ] `backend/db/database.py` — SQLite connection (WAL mode), migration runner, query helpers
+- [x] `backend/db/migrations/001_initial.sql` — `conversations`, `messages`, `settings`, `_migrations` tables
+- [x] `backend/db/database.py` — SQLite connection (WAL mode), migration runner, query helpers
 
 ### 1.3 Integration
 
