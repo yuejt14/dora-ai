@@ -2,6 +2,7 @@
 
 ## Current State
 
+- Phase 1.4 complete: pytest + pytest-asyncio, 21 unit tests across all Phase 1 modules
 - Phase 1.3 complete: Provider + DB integration, asyncio bridge, conversation pipeline, CLI chat loop
 - Phase 1.2 complete: SQLite database layer with migrations, query helpers, WAL mode
 - Phase 1.1 complete: config, LLM provider layer, Ollama streaming, structured logging
@@ -42,9 +43,11 @@
 
 ### 1.4 Tests
 
-- [ ] Install `pytest` as dev dependency
-- [ ] Unit tests for Ollama provider (mock httpx, verify streaming contract and error handling)
-- [ ] Unit tests for database (migrations apply cleanly, CRUD operations, WAL mode)
+- [x] Install `pytest` + `pytest-asyncio` as dev dependencies
+- [x] Unit tests for Ollama provider (mock httpx, verify streaming contract and error handling)
+- [x] Unit tests for database (migrations apply cleanly, CRUD operations, WAL mode)
+- [x] Unit tests for AsyncBridge (run coroutine, run_iter, exception propagation)
+- [x] Unit tests for ConversationPipeline (create/list, send/persist, streaming, error handling, history)
 
 ---
 
