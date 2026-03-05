@@ -2,6 +2,7 @@
 
 ## Current State
 
+- Phase 1.3 complete: Provider + DB integration, asyncio bridge, conversation pipeline, CLI chat loop
 - Phase 1.2 complete: SQLite database layer with migrations, query helpers, WAL mode
 - Phase 1.1 complete: config, LLM provider layer, Ollama streaming, structured logging
 - No frontend, no UI yet
@@ -35,9 +36,9 @@
 
 ### 1.3 Integration
 
-- [ ] Wire provider + DB together: send message → stream response → persist both
-- [ ] Set up the asyncio bridge (dedicated event loop thread for async providers, callable from sync code)
-- [ ] CLI smoke test: multi-turn conversation, persisted and reloadable across restarts
+- [x] Wire provider + DB together: send message → stream response → persist both
+- [x] Set up the asyncio bridge (dedicated event loop thread for async providers, callable from sync code)
+- [x] CLI smoke test: multi-turn conversation, persisted and reloadable across restarts
 
 ### 1.4 Tests
 
