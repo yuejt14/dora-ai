@@ -56,11 +56,12 @@ See `docs/architecture.md` for threading, streaming, and error handling. See `do
 - **Never install dependencies early.** Add each dependency in the task that first uses it.
 - **Backend first.** Build all core backend functionality before touching frontend/UI.
 - **Update `plan.md` on task completion.** `plan.md` tracks progress — whenever a task or sub-task is finished, check the corresponding checkbox and update the "Current State" summary at the top.
+- **Run `/simplify` after all edits.** After finishing any code edit (new files, modifications, refactors), run `/simplify` to review for reuse, quality, and efficiency.
 
 ## Coding Conventions
 
 - Python 3.14+, type hints everywhere, async where I/O bound
-- `uv` for Python dependency management
+- `uv` for Python dependency management — **always run Python and Ruff through `uv`** (e.g. `uv run python`, `uv run ruff check .`, `uv run ruff format .`)
 - Frontend: React 19, TypeScript strict, Zustand for state, Tailwind for styling
 - All Python-JS communication typed in `frontend/src/lib/bridge.ts`
 - Soul definitions: YAML files in `souls/` are source of truth; `souls` DB table caches them. Re-scan on startup.

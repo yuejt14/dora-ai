@@ -2,6 +2,7 @@
 
 ## Current State
 
+- Phase 2.2 complete: TagParser (streaming, tier-filtered), EmotionClassifier (keyword/pattern), SentimentAnalyzer (valence/arousal), 61 new tests (135 total)
 - Phase 2.1 complete: SoulDefinition + CharacterState + SessionState models, default.yaml, souls migration, 53 new tests (74 total)
 - Phase 1.4 complete: pytest + pytest-asyncio, 21 unit tests across all Phase 1 modules
 - Phase 1.3 complete: Provider + DB integration, asyncio bridge, conversation pipeline, CLI chat loop
@@ -65,23 +66,23 @@
 
 ### 2.2 Tag Parser + Emotion Classifier
 
-- [ ] `backend/soul/tag_parser.py` — stateful streaming tag parser with `StreamEvent` types (`TextEvent`, `EmotionEvent`, `MoodEvent`, `ActionEvent`, `ThoughtEvent`)
+- [x] `backend/soul/tag_parser.py` — stateful streaming tag parser with `StreamEvent` types (`TextEvent`, `EmotionEvent`, `MoodEvent`, `ActionEvent`, `ThoughtEvent`)
   - Handles tags split across chunks (buffers on `[` until `]`)
   - Flushes as plain text if buffer exceeds 80 chars
   - Three tag tiers: `minimal` (7B), `standard` (13B+), `full` (Claude/GPT-4)
   - Defaults to neutral emotion when no tags emitted
-- [ ] `backend/soul/emotion_classifier.py` — text-based emotion fallback when LLM doesn't emit tags
+- [x] `backend/soul/emotion_classifier.py` — text-based emotion fallback when LLM doesn't emit tags
   - Phase 2: keyword/pattern-based (no ML dependencies). Scores text against emotion word lists, exclamation density, question clusters, sentence length patterns
   - Returns `EmotionEstimate(name, intensity, confidence)`. Priority: tag > classifier > neutral
   - Phase 3+ upgrade path: swap in a small transformer classifier (e.g. `roberta-base-go_emotions`) once `torch` is available
-- [ ] `backend/soul/sentiment.py` — user sentiment analyzer on incoming user messages
+- [x] `backend/soul/sentiment.py` — user sentiment analyzer on incoming user messages
   - Phase 2: keyword/pattern-based. Detects valence (positive/negative) and arousal (calm/intense)
   - Feeds `SessionState.user_sentiment_trail` and `user_sentiment_inertia`
   - PromptBuilder injects: "The user seems [upbeat/subdued/frustrated]..."
   - Phase 4 upgrade: STT pipeline feeds vocal prosody into the same trail
-- [ ] Unit tests for tag parser (split tags, missing tags, malformed tags, all event types, tier filtering)
-- [ ] Unit tests for emotion classifier (keyword matching, priority over neutral, confidence thresholds)
-- [ ] Unit tests for sentiment analyzer (valence/arousal detection, inertia calculation)
+- [x] Unit tests for tag parser (split tags, missing tags, malformed tags, all event types, tier filtering)
+- [x] Unit tests for emotion classifier (keyword matching, priority over neutral, confidence thresholds)
+- [x] Unit tests for sentiment analyzer (valence/arousal detection, inertia calculation)
 
 ### 2.3 Prompt Builder + Arc Tracker
 
