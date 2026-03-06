@@ -76,7 +76,7 @@ Contains: current trait values, relationship stage, total turn count, formed opi
 
 The character's moment-to-moment state within a single conversation. Exists only in memory. Resets when the conversation ends or the app restarts.
 
-Contains: emotion trail, emotional inertia, conversation arc (phase + energy + topics), callback candidates, spontaneity cooldown tracking.
+Contains: emotion trail, emotional inertia, user sentiment trail, user sentiment inertia, conversation arc (phase + energy + topics), callback candidates, spontaneity cooldown tracking.
 
 ---
 
@@ -91,9 +91,34 @@ Mood (hours/days)  ->  Session Emotion (minutes)  ->  Per-Message Tags (seconds)
 
 - **Mood**: slow-moving baseline stored in CharacterState. Decays toward the YAML-defined baseline with a configurable half-life (`emotions.mood.decay_hours`). Carries across conversations.
 - **Session emotion**: weighted moving average of recent per-message emotions. Creates the feeling that excitement from message 3 still colors message 7. Injected into the prompt as natural language.
-- **Per-message tags**: `[emotion:NAME intensity:FLOAT]` emitted by the LLM in the response stream. Captured by TagParser, fed back into SessionState.
+- **Per-message tags**: `[emotion:NAME intensity:FLOAT]` emitted by the LLM in the response stream. Captured by TagParser, fed back into SessionState. When the LLM does not emit tags (common with weaker models), the **emotion classifier** analyzes the response text and provides a fallback emotion. This ensures emotion detection works reliably across all model tiers.
 
-If no emotion tag is emitted (common with weaker models), session emotion decays toward neutral gradually rather than snapping.
+If neither tags nor classifier produce a result, session emotion decays toward neutral gradually rather than snapping.
+
+### Emotional Fluidity
+
+The `emotions.fluidity` YAML parameter (0.0-1.0) controls overall emotional reactivity, separate from personality traits:
+
+- **Low fluidity (0.0-0.3)**: stoic. Emotions shift slowly, the character maintains composure even under intense topics. Session inertia changes gradually.
+- **Mid fluidity (0.4-0.6)**: balanced. Natural emotional responsiveness.
+- **High fluidity (0.7-1.0)**: highly reactive. Emotions swing fast and visibly, the character wears their heart on their sleeve. Recent emotions are weighted more heavily in inertia calculation.
+
+Fluidity scales the inertia weight formula: `weight = recency_factor ** (1 / fluidity)`. High fluidity means recent emotions dominate; low fluidity means the average is spread more evenly across the trail.
+
+### User Sentiment Awareness
+
+The system tracks the user's emotional state (not just the character's) using lightweight text-based sentiment analysis on user messages. No ML dependencies in Phase 2 — uses keyword/pattern matching for valence (positive/negative) and arousal (calm/intense).
+
+```
+User sentiment flow:
+  User message text
+    -> sentiment analyzer (keyword/pattern, no LLM call)
+    -> SessionState.user_sentiment_trail (ring buffer)
+    -> SessionState.user_sentiment_inertia (weighted average)
+    -> PromptBuilder injects: "The user seems [upbeat/subdued/frustrated]..."
+```
+
+In Phase 4 (voice), the STT pipeline feeds richer vocal prosody data (pitch variance, speaking rate, energy) into the same `user_sentiment_trail`, upgrading the signal without changing the architecture.
 
 ---
 
@@ -145,8 +170,10 @@ In-memory volatile state for the current conversation.
 
 Fields:
 - `conversation_id: str`
-- `emotion_trail: list[EmotionSnapshot]` — ring buffer of last ~10 emotions with turn numbers
-- `emotional_inertia: EmotionSnapshot` — weighted average of recent emotions
+- `emotion_trail: list[EmotionSnapshot]` — ring buffer of last ~10 character emotions with turn numbers
+- `emotional_inertia: EmotionSnapshot` — weighted average of recent character emotions
+- `user_sentiment_trail: list[SentimentSnapshot]` — ring buffer of last ~10 user sentiment readings (valence + arousal)
+- `user_sentiment_inertia: SentimentSnapshot` — weighted average of recent user sentiment
 - `arc: ConversationArc` — phase, energy, topics, turn count
 - `callbacks: list[CallbackCandidate]` — details, jokes, moments worth referencing
 - `last_wildcard_turn: int | None`
@@ -181,16 +208,17 @@ The compression layer. Takes all three state layers + optional memories and prod
 | 1 | Identity | YAML | No |
 | 2 | Personality | YAML core traits + current mutable values + stage modifiers | Per-growth-eval |
 | 3 | Speaking style | YAML + adjusted for relationship stage + energy | Per-growth-eval |
-| 4 | Emotional context | Persistent mood + session inertia | Per-turn |
-| 5 | Relationship | Current stage description | Per-growth-eval |
-| 6 | Conversation arc | Session topics, phase, energy, callbacks | Per-turn |
-| 7 | Opinions | YAML seed + formed opinions relevant to current topics | Per-growth-eval |
-| 8 | Memories | Phase 3 hook: semantically relevant memories | Per-turn |
-| 9 | Boundaries | YAML hard + soft | No |
-| 10 | Wildcard | Spontaneity injection (if probability fires) | Per-turn (random) |
-| 11 | Tag instructions | Format guide adapted to tag_tier | No |
+| 4 | Emotional context | Persistent mood + session inertia (scaled by fluidity) | Per-turn |
+| 5 | User context | User sentiment inertia: "The user seems [upbeat/subdued/frustrated]..." | Per-turn |
+| 6 | Relationship | Current stage description | Per-growth-eval |
+| 7 | Conversation arc | Session topics, phase, energy, callbacks | Per-turn |
+| 8 | Opinions | YAML seed + formed opinions relevant to current topics | Per-growth-eval |
+| 9 | Memories | Phase 3 hook: semantically + emotionally relevant memories | Per-turn |
+| 10 | Boundaries | YAML hard + soft | No |
+| 11 | Wildcard | Spontaneity injection (if probability fires) | Per-turn (random) |
+| 12 | Tag instructions | Format guide adapted to tag_tier | No |
 
-Sections 4, 6, and 10 change every turn. The rest are cached and rebuilt only when CharacterState changes.
+Sections 4, 5, 7, and 11 change every turn. The rest are cached and rebuilt only when CharacterState changes.
 
 **Key principle**: each section is a short natural-language paragraph, NOT a dump of the YAML. The builder interpolates current trait values into readable prose. Example:
 
@@ -235,6 +263,36 @@ ThoughtEvent  { type: "thought", text: str }
 
 **Feedback loop**: EmotionEvents feed back into `SessionState.emotion_trail`. ThoughtEvents are mined for callback candidates. MoodEvents update `CharacterState.mood`.
 
+### Emotion Classifier
+
+`backend/soul/emotion_classifier.py`
+
+Fallback emotion detection that analyzes response *text* rather than relying on LLM-emitted tags. Inspired by SillyTavern's approach — makes emotion detection reliable across all model tiers.
+
+**Phase 2 implementation**: keyword/pattern-based. No ML dependencies.
+- Scores text against emotion word lists (exclamation density, question clusters, emotional vocabulary, sentence length patterns)
+- Maps to the same emotion set as the tag system
+- Returns `EmotionEstimate(name, intensity, confidence)`
+- Runs after TagParser on the full response text
+
+**Phase 3+ upgrade path**: swap in a small transformer classifier (e.g. `SamLowe/roberta-base-go_emotions`) once `torch` is installed for memory embeddings. Same interface, better accuracy.
+
+**Priority**: TagParser tags > emotion classifier > neutral fallback. If the LLM emits a valid emotion tag, the classifier result is ignored. The classifier only activates when no tag was found.
+
+### User Sentiment Analyzer
+
+`backend/soul/sentiment.py`
+
+Lightweight text-based analysis of the user's emotional state. Runs on each user message before `pre_process`.
+
+**Phase 2 implementation**: keyword/pattern-based. No ML dependencies.
+- Detects valence (positive/negative, -1.0 to 1.0) and arousal (calm/intense, 0.0 to 1.0)
+- Signals: emotional vocabulary, exclamation/question marks, message length, capitalization, emoji patterns
+- Returns `SentimentSnapshot(valence, arousal, turn)`
+- Appended to `SessionState.user_sentiment_trail`
+
+**Phase 4 upgrade**: STT pipeline adds vocal prosody features (pitch variance, speaking rate, energy) to the same trail. Architecture unchanged — the `SentimentSnapshot` model gains optional `vocal_features` fields.
+
 ### SoulEngine
 
 `backend/soul/engine.py`
@@ -242,17 +300,20 @@ ThoughtEvent  { type: "thought", text: str }
 Owns all three state layers. Two main methods:
 
 **`pre_process(history, user_message, memories?) -> list[Message]`**
-1. Update SessionState arc (topic tracking, phase, energy)
-2. Call PromptBuilder.build() to generate system prompt
-3. Assemble messages: [system, ...history, user_msg]
-4. Return the messages array for the LLM
+1. Run user sentiment analyzer on user_message -> update SessionState.user_sentiment_trail
+2. Update SessionState arc (topic tracking, phase, energy)
+3. Call PromptBuilder.build() to generate system prompt (includes user sentiment context)
+4. Assemble messages: [system, ...history, user_msg]
+5. Return the messages array for the LLM
 
 **`post_process(stream) -> AsyncIterator[StreamEvent]`**
 1. Pipe raw token stream through TagParser
-2. For each EmotionEvent: record in SessionState, recalculate inertia
-3. For each ThoughtEvent: scan for callback candidates
-4. For each MoodEvent: update CharacterState mood
-5. Yield all events to the consumer
+2. Collect full response text for emotion classifier
+3. If no EmotionEvent from TagParser: run emotion classifier on full text, emit fallback EmotionEvent
+4. For each EmotionEvent: record in SessionState, recalculate inertia (scaled by fluidity)
+5. For each ThoughtEvent: scan for callback candidates
+6. For each MoodEvent: update CharacterState mood
+7. Yield all events to the consumer
 
 **`soul_engine=None`** is a valid state — the pipeline falls back to raw LLM calls with no system prompt (Phase 1 backward compatibility).
 
@@ -339,31 +400,29 @@ The wildcard is a suggestion, not a command. Strong models weave it in naturally
 ### Reactive Path (user initiates)
 
 ```
-User: "I've been getting into rock climbing lately"
-  |
-  v
-SessionState snapshot:
-  emotion_trail: [curious 0.6, happy 0.7]
-  inertia: { happy, 0.6 }
-  arc: { phase: exploring, energy: 0.7,
-         topics: [weekend_plans, hobbies] }
-  callbacks: ["user's cat Miso"]
+User: "I've been getting into rock climbing lately!"
   |
   v
 SoulEngine.pre_process():
-  1. Update arc: new turn, track topics
-  2. PromptBuilder.build():
+  1. Sentiment analyzer on user message:
+     -> valence: +0.7 (positive), arousal: 0.6 (moderately excited)
+     -> appended to user_sentiment_trail
+     -> user_sentiment_inertia updated: { valence: +0.6, arousal: 0.5 }
+  2. Update arc: new turn, track topics
+  3. PromptBuilder.build():
      - Identity: "You are Dora, a curious and warm companion..."
      - Personality: core traits + current values (openness 0.78, etc.)
      - Style: adjusted for acquaintance stage
      - Emotional context: "You've been feeling happy and engaged
        for the last few messages. That warmth is still with you."
+       (inertia scaled by fluidity=0.6)
+     - User context: "The user seems enthusiastic and upbeat."
      - Relationship: acquaintance stage description
      - Arc: "Conversation exploring hobbies. Energy is good.
        User mentioned their cat Miso earlier."
      - [spontaneity roll: 0.31 > 0.25 threshold = no wildcard]
      - Tag instructions for standard tier
-  3. Assemble: [system, ...history, user_msg]
+  4. Assemble: [system, ...history, user_msg]
   |
   v
 LLM generates:
@@ -373,15 +432,18 @@ LLM generates:
    outdoor-routes kind of person."
   |
   v
-SoulEngine.post_process() via TagParser:
-  - EmotionEvent("excited", 0.8)  -> UI + SessionState
-  - ActionEvent("perks up")       -> UI character animation
-  - TextEvent("Oh! Rock climbing?...") -> UI chat
+SoulEngine.post_process():
+  TagParser extracts:
+    - EmotionEvent("excited", 0.8)  -> UI + SessionState
+    - ActionEvent("perks up")       -> UI character animation
+    - TextEvent("Oh! Rock climbing?...") -> UI chat
+  Emotion classifier: skipped (tag found)
   |
   v
 SessionState updated:
   emotion_trail: [curious 0.6, happy 0.7, excited 0.8]
-  inertia: { excited, 0.72 }   (shifted toward excited)
+  inertia: { excited, 0.72 }   (shifted toward excited, scaled by fluidity)
+  user_sentiment_trail: [..., { valence: +0.7, arousal: 0.6 }]
   arc: { phase: exploring, energy: 0.75,
          topics: [..., rock_climbing(new)] }
   callbacks: ["user's cat Miso", "rock climbing preference"]
@@ -390,6 +452,25 @@ SessionState updated:
 Persist clean text + emotion to messages table
 Increment CharacterState.total_turns
 growth_evaluator.should_evaluate()? -> no (8 turns since last)
+```
+
+**Fallback example** (7B model, no tags emitted):
+
+```
+LLM generates (no tags):
+  "Oh rock climbing? That sounds really fun! Is this like
+   indoor bouldering or outdoor routes?"
+  |
+  v
+SoulEngine.post_process():
+  TagParser: no tags found
+  Emotion classifier on full text:
+    -> "really fun" + "!" + question = EmotionEstimate("excited", 0.6, confidence=0.7)
+    -> emits fallback EmotionEvent("excited", 0.6)
+  |
+  v
+SessionState updated with classifier-derived emotion
+(same feedback loop, slightly lower confidence)
 ```
 
 ### Proactive Path (AI initiates)
@@ -497,6 +578,7 @@ speaking_style:
 
 emotions:
   baseline: string                    # resting mood name
+  fluidity: float [0-1]              # emotional reactivity (0=stoic, 1=highly reactive)
   tendencies:
     {emotion_name}:
       triggers: [string]
@@ -584,14 +666,16 @@ tag_tier: minimal | standard | full
 
 ```
 backend/soul/
-  definition.py       SoulDefinition + all sub-models, YAML loader
-  state.py            CharacterState + SessionState + MoodSnapshot etc.
-  engine.py           SoulEngine (pre_process, post_process, owns state)
-  prompt_builder.py   compresses 3 layers -> system prompt
-  tag_parser.py       streaming parser + StreamEvent types
-  growth.py           GrowthEvaluator (async, batched, bounded)
-  initiative.py       InitiativeScheduler (timer-driven, proactive)
-  arc.py              conversation arc tracker + topic extractor
+  definition.py           SoulDefinition + all sub-models, YAML loader
+  state.py                CharacterState + SessionState + MoodSnapshot etc.
+  engine.py               SoulEngine (pre_process, post_process, owns state)
+  prompt_builder.py       compresses 3 layers -> system prompt
+  tag_parser.py           streaming parser + StreamEvent types
+  emotion_classifier.py   text-based emotion fallback (keyword/pattern Phase 2, ML Phase 3+)
+  sentiment.py            user sentiment analyzer (text Phase 2, voice Phase 4)
+  growth.py               GrowthEvaluator (async, batched, bounded)
+  initiative.py           InitiativeScheduler (timer-driven, proactive)
+  arc.py                  conversation arc tracker + topic extractor
 
 backend/db/migrations/
   002_add_souls.sql
@@ -609,12 +693,13 @@ The system adapts to model capability:
 | Capability | Strong models (Claude, GPT-4) | Mid models (13B+) | Weak models (7B) |
 |---|---|---|---|
 | Tag tier | full | standard | minimal |
-| Tag compliance | Reliable | Mostly reliable | Unreliable, defaults to neutral |
+| Tag compliance | Reliable | Mostly reliable | Unreliable |
+| Emotion detection | Tags (primary) | Tags (primary) | Classifier fallback (reliable) |
 | Spontaneity wildcards | Woven in naturally | Usually followed | Often ignored (fine) |
 | Growth reflection | Nuanced JSON | Usable JSON | May need simpler prompt |
 | Initiative responses | Natural, contextual | Decent | May feel forced |
 
-The tag tier is set per-soul in the YAML. Unrecognized or malformed tags are always flushed as plain text. Missing emotion tags default to neutral with decay. The system never breaks — it just becomes less expressive with weaker models.
+The tag tier is set per-soul in the YAML. Unrecognized or malformed tags are always flushed as plain text. When the LLM does not emit emotion tags, the emotion classifier analyzes the response text to provide a fallback. This ensures emotion detection works on every model tier. User sentiment detection is always active (text-based, independent of the LLM).
 
 ---
 
@@ -623,12 +708,14 @@ The tag tier is set per-soul in the YAML. Unrecognized or malformed tags are alw
 | Capability | Neuro-sama | Dora (this design) |
 |---|---|---|
 | Consistent personality voice | Partially fine-tuned into weights | Prompt-driven (more configurable, slightly less deep) |
-| Emotional expressiveness | Real-time, fluid | 3-tier emotion system (mood + session + per-message) |
+| Emotional expressiveness | Real-time, fluid | 3-tier emotion system (mood + session + per-message) + fluidity control |
+| Emotion detection reliability | Baked into model | Tag parser + classifier fallback (reliable on all model tiers) |
+| User emotion awareness | Reacts to chat tone | Text sentiment analysis (Phase 2) + vocal prosody (Phase 4) |
 | Proactive behavior | Reacts to environment, initiates | Initiative scheduler with silence/context triggers |
 | Unpredictability | Emergent from training | Controlled spontaneity system with wildcard types |
-| Emotional fluidity | Carries across messages naturally | Session emotion trail + inertia feedback loop |
+| Emotional fluidity | Carries across messages naturally | Session emotion trail + inertia feedback loop + fluidity parameter |
 | Relationship evolution | Mostly static | Staged relationship with bounded trait drift |
-| Memory/continuity | Limited | Semantic search memories (Phase 3) + callback system |
+| Memory/continuity | Limited RAG | Dual-embedding memories (semantic + emotional) + episodic journal (Phase 3) |
 | Character growth | Version updates (manual) | Automated bounded growth via LLM reflection |
 | Voice/cadence | Custom TTS voice | Per-emotion TTS parameters + cadence config in YAML |
 | Narrative awareness | Implicit from context window | Explicit arc tracking (phase, energy, topics) |
@@ -637,6 +724,22 @@ The tag tier is set per-soul in the YAML. Unrecognized or malformed tags are alw
 
 ### Remaining gaps vs. Neuro-sama
 
-- **Training-level personality**: Neuro's personality is partially in model weights. Dora relies on prompting, which is more flexible but less deeply ingrained. Mitigated by the multi-layer prompt system (many reinforcing signals make it hard to break character).
+- **Training-level personality**: Neuro's personality is partially in model weights. Dora relies on prompting, which is more flexible but less deeply ingrained. Mitigated by the multi-layer prompt system (many reinforcing signals make it hard to break character). Anthropic's Persona Selection Model research validates that multi-signal prompting effectively steers the model's persona selection.
 - **Multi-character dynamics**: not in scope for Phase 2. The soul system supports multiple YAML definitions, but the pipeline doesn't orchestrate multi-agent conversations.
 - **Environmental awareness**: Neuro reacts to external events (stream, chat, donations). Dora is 1:1 desktop. The initiative system partially covers this but doesn't react to external stimuli beyond silence/time.
+
+---
+
+## Research Basis
+
+Key research and systems that informed this design:
+
+- **Inworld AI** — three-layer Character Engine (Character Brain / Contextual Mesh / Real-Time AI), 18-emotion engine with emotional fluidity slider. Informed the fluidity parameter and separation of emotion from personality.
+- **Neuro-sama** — 2B parameter fine-tuned LLM with RAG memory. Benchmark for personality consistency and proactive behavior.
+- **Anthropic Persona Selection Model** — theory that LLMs simulate personas from training data, and multi-signal prompting effectively steers persona selection. Validates the multi-section PromptBuilder approach.
+- **Emotional RAG** (arxiv 2410.23041) — dual embeddings (semantic + 128-dim emotion vector) for memory retrieval. Informed the Phase 3 dual-embedding memory design.
+- **Cognitively-Inspired Episodic Memory** (arxiv 2511.10652) — first-person emotionally-tagged memories outperform raw facts, especially on smaller models. Informed the episodic journal approach.
+- **Replika** — multi-model pipeline with journal system and sentiment analysis. Informed the structured relationship journal and user sentiment tracking.
+- **Kindroid** — dual-layer memory (Backstory + Key Memories + Cascaded Memory). Validates the three temporal scale approach.
+- **SillyTavern** — emotion classification from output text (not tags). Informed the emotion classifier fallback.
+- **Hume AI EVI** — empathic voice interface with vocal prosody analysis. Informed the Phase 4 vocal emotion detection design.

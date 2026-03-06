@@ -58,18 +58,29 @@
 ### 2.1 Definition + State Models
 
 - [ ] `backend/soul/definition.py` — `SoulDefinition` Pydantic model + YAML loader (install `pyyaml`)
-- [ ] `backend/soul/state.py` — `CharacterState` (persistent, SQLite) + `SessionState` (volatile, in-memory) + supporting models (`MoodSnapshot`, `FormedOpinion`, `RecordedMilestone`, `EmotionSnapshot`, `ConversationArc`, etc.)
+- [ ] `backend/soul/state.py` — `CharacterState` (persistent, SQLite) + `SessionState` (volatile, in-memory) + supporting models (`MoodSnapshot`, `FormedOpinion`, `RecordedMilestone`, `EmotionSnapshot`, `SentimentSnapshot`, `ConversationArc`, etc.)
 - [ ] `souls/default.yaml` — default companion personality (full schema: identity, traits, speaking style, voice, emotions, relationship stages, opinions, quirks, boundaries, spontaneity, initiative, growth gates, tag tier)
 - [ ] `backend/db/migrations/002_add_souls.sql` — `souls` table (YAML cache + hash for change detection) + `character_state` table (single JSON blob) + single-active-soul trigger
 
-### 2.2 Tag Parser
+### 2.2 Tag Parser + Emotion Classifier
 
 - [ ] `backend/soul/tag_parser.py` — stateful streaming tag parser with `StreamEvent` types (`TextEvent`, `EmotionEvent`, `MoodEvent`, `ActionEvent`, `ThoughtEvent`)
   - Handles tags split across chunks (buffers on `[` until `]`)
   - Flushes as plain text if buffer exceeds 80 chars
   - Three tag tiers: `minimal` (7B), `standard` (13B+), `full` (Claude/GPT-4)
   - Defaults to neutral emotion when no tags emitted
+- [ ] `backend/soul/emotion_classifier.py` — text-based emotion fallback when LLM doesn't emit tags
+  - Phase 2: keyword/pattern-based (no ML dependencies). Scores text against emotion word lists, exclamation density, question clusters, sentence length patterns
+  - Returns `EmotionEstimate(name, intensity, confidence)`. Priority: tag > classifier > neutral
+  - Phase 3+ upgrade path: swap in a small transformer classifier (e.g. `roberta-base-go_emotions`) once `torch` is available
+- [ ] `backend/soul/sentiment.py` — user sentiment analyzer on incoming user messages
+  - Phase 2: keyword/pattern-based. Detects valence (positive/negative) and arousal (calm/intense)
+  - Feeds `SessionState.user_sentiment_trail` and `user_sentiment_inertia`
+  - PromptBuilder injects: "The user seems [upbeat/subdued/frustrated]..."
+  - Phase 4 upgrade: STT pipeline feeds vocal prosody into the same trail
 - [ ] Unit tests for tag parser (split tags, missing tags, malformed tags, all event types, tier filtering)
+- [ ] Unit tests for emotion classifier (keyword matching, priority over neutral, confidence thresholds)
+- [ ] Unit tests for sentiment analyzer (valence/arousal detection, inertia calculation)
 
 ### 2.3 Prompt Builder + Arc Tracker
 
@@ -79,8 +90,8 @@
 ### 2.4 Soul Engine + Pipeline Integration
 
 - [ ] `backend/soul/engine.py` — `SoulEngine` with `pre_process()` and `post_process()`:
-  - Pre: update SessionState arc, build system prompt via PromptBuilder, assemble messages
-  - Post: pipe stream through TagParser, feed EmotionEvents back into SessionState (emotional inertia), mine ThoughtEvents for callbacks, update mood from MoodEvents
+  - Pre: run user sentiment analyzer on user message, update SessionState arc, build system prompt via PromptBuilder (includes user sentiment + emotional context scaled by fluidity), assemble messages
+  - Post: pipe stream through TagParser, run emotion classifier as fallback if no tags found, feed EmotionEvents back into SessionState (inertia scaled by fluidity), mine ThoughtEvents for callbacks, update mood from MoodEvents
   - Supports `soul_engine=None` for raw LLM fallback (Phase 1 backward compat)
 - [ ] Update `backend/conversation.py` — yield `StreamEvent`s instead of raw strings, increment turn count, hook for growth evaluation trigger
 - [ ] CLI test: personality-flavored streamed responses with emotion tags parsed out, emotional inertia carrying across turns
@@ -110,31 +121,40 @@
 
 ### 2.8 Tests
 
-- [ ] Unit tests for SoulDefinition YAML loading + validation
+- [ ] Unit tests for SoulDefinition YAML loading + validation (including fluidity parameter)
 - [ ] Unit tests for CharacterState serialization, effective_trait, mood decay
-- [ ] Unit tests for SessionState emotional inertia calculation
+- [ ] Unit tests for SessionState emotional inertia calculation (with fluidity scaling)
+- [ ] Unit tests for SessionState user sentiment trail + inertia
 - [ ] Unit tests for arc phase detection heuristics
 - [ ] Unit tests for GrowthEvaluator bounds enforcement
 - [ ] Integration test: multi-turn conversation with personality, emotions carrying across turns
+- [ ] Integration test: emotion classifier fallback when no tags emitted
+- [ ] Integration test: user sentiment influences character response
 
 ---
 
 ## Phase 3 — Memory System
 
-**Goal:** The AI remembers facts about the user across conversations.
+**Goal:** The AI remembers facts about the user across conversations, with emotionally-aware recall.
 
 - [ ] Install `sentence-transformers` (pulls in `torch`, `transformers`, `huggingface-hub`), `sqlite-vec`
-- [ ] `backend/db/migrations/003_add_memories.sql` — `memories` and `memory_vectors` tables
-- [ ] `backend/memory/embeddings.py` — local HuggingFace embeddings via `sentence-transformers` (default model: `all-MiniLM-L6-v2`, 384 dims — no Ollama dependency)
-- [ ] `backend/memory/extractor.py` — LLM-based fact extraction (batched: triggers after 5+ unprocessed turns, on idle 30s+, or on conversation end — NOT every turn)
+- [ ] `backend/db/migrations/003_add_memories.sql` — `memories`, `memory_vectors`, and `memory_emotion_vectors` tables
+- [ ] `backend/memory/embeddings.py` — local HuggingFace embeddings via `sentence-transformers`:
+  - Semantic embeddings: `all-MiniLM-L6-v2` (384 dims)
+  - Emotion embeddings: `SamLowe/roberta-base-go_emotions` (28-dim emotion scores as vector). Same library, no extra dependency
+- [ ] `backend/memory/extractor.py` — LLM-based memory extraction (batched: triggers after 5+ unprocessed turns, on idle 30s+, or on conversation end — NOT every turn)
+  - Extracts **first-person episodic memories** from the character's perspective, not raw facts. E.g. "They told me they've gotten into rock climbing — I could tell they were excited. Their friend Alex introduced them to it."
+  - Each memory tagged with: emotional context at extraction time (valence, arousal, emotion name), importance score, source conversation
+  - Upgrade emotion classifier to transformer-based (`roberta-base-go_emotions`) now that `torch` is available
+- [ ] `backend/memory/journal.py` — `RelationshipJournal`: structured summary of the relationship, updated by GrowthEvaluator alongside personality growth. Single paragraph describing the user, key topics, interaction patterns, emotional dynamics. Injected into system prompt as a natural-language block.
 - [ ] `backend/memory/manager.py` — `MemoryManager`:
-  - Store facts with vector embeddings
-  - Semantic search for relevant memories before each LLM call
+  - Store episodic memories with dual embeddings (semantic + emotion)
+  - **Hybrid retrieval**: weighted combination of semantic similarity (what's topically relevant) and emotional similarity (what felt like this moment). Weights configurable.
   - Memory importance scoring (LLM assigns during extraction)
   - Fallback to SQL LIKE search if sqlite-vec fails to load
-- [ ] Integrate MemoryManager into ConversationPipeline (memory injection into prompts)
-- [ ] CLI test: tell AI a fact → new conversation → AI recalls it
-- [ ] Unit tests for memory retrieval accuracy (store facts, verify semantic search recalls them, test fallback search)
+- [ ] Integrate MemoryManager into ConversationPipeline (memory injection into prompts via PromptBuilder section 9)
+- [ ] CLI test: tell AI a fact → new conversation → AI recalls it; test emotional recall (share something sad → new sad conversation → AI recalls emotionally similar memories)
+- [ ] Unit tests for memory retrieval accuracy (semantic search, emotional search, hybrid ranking, fallback search)
 
 ---
 
@@ -146,12 +166,16 @@
 
 - [ ] Verify `faster-whisper` installs on Python 3.14 (ctranslate2 wheels). If not, evaluate alternatives: `openai-whisper`, `whisper.cpp` Python bindings, or pin a working ctranslate2 build.
 
-### 4.1 Speech-to-Text
+### 4.1 Speech-to-Text + Vocal Emotion
 
 - [ ] Install `faster-whisper` (or chosen alternative), `sounddevice` (mic capture + audio playback)
 - [ ] `backend/voice/vad.py` — Silero VAD for silence filtering (`torch` already installed from Phase 3)
 - [ ] `backend/voice/stt.py` — faster-whisper wrapper (CUDA float16, "small" model)
-- [ ] CLI test: record from mic → VAD → transcription → print text
+- [ ] `backend/voice/prosody.py` — vocal emotion extraction from audio segments (numpy-based, no extra model):
+  - Pitch variance, speaking rate, energy level, pause patterns
+  - Maps to valence/arousal, feeds into `SessionState.user_sentiment_trail` (upgrades the text-only sentiment from Phase 2)
+  - Character responds to *how the user sounds*, not just what they say
+- [ ] CLI test: record from mic → VAD → transcription + vocal emotion → print text + detected emotion
 
 ### 4.2 Text-to-Speech
 
