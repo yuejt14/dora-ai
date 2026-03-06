@@ -55,6 +55,7 @@ See `docs/architecture.md` for threading, streaming, and error handling. See `do
 - **Never create empty folders.** Only create directories when adding files.
 - **Never install dependencies early.** Add each dependency in the task that first uses it.
 - **Backend first.** Build all core backend functionality before touching frontend/UI.
+- **Update `plan.md` on task completion.** `plan.md` tracks progress — whenever a task or sub-task is finished, check the corresponding checkbox and update the "Current State" summary at the top.
 
 ## Coding Conventions
 
