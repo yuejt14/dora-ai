@@ -2,20 +2,15 @@
 
 import uuid
 from collections.abc import Iterator
-from datetime import datetime, timezone
 
 from backend.async_bridge import AsyncBridge
 from backend.config import get_logger
 from backend.db.database import Database
 from backend.providers.base import Message
 from backend.providers.router import ProviderRouter
+from backend.utils import utc_now
 
 log = get_logger(__name__)
-
-
-def _utc_now() -> str:
-    """Return current UTC time as ISO 8601 string."""
-    return datetime.now(timezone.utc).isoformat()
 
 
 class ConversationPipeline:
@@ -33,7 +28,7 @@ class ConversationPipeline:
     ) -> str:
         """Create a new conversation and return its ID."""
         conv_id = uuid.uuid4().hex
-        now = _utc_now()
+        now = utc_now()
         self._db.execute(
             "INSERT INTO conversations (id, title, soul_id, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -67,7 +62,7 @@ class ConversationPipeline:
         """
         # 1. Persist user message
         user_msg_id = uuid.uuid4().hex
-        now = _utc_now()
+        now = utc_now()
         self._db.execute(
             "INSERT INTO messages (id, conversation_id, role, content, created_at) "
             "VALUES (?, ?, 'user', ?, ?)",
@@ -95,7 +90,7 @@ class ConversationPipeline:
         assistant_text = "".join(full_response)
         if assistant_text:
             assistant_msg_id = uuid.uuid4().hex
-            now = _utc_now()
+            now = utc_now()
             self._db.execute(
                 "INSERT INTO messages (id, conversation_id, role, content, created_at) "
                 "VALUES (?, ?, 'assistant', ?, ?)",
@@ -105,5 +100,5 @@ class ConversationPipeline:
         # 5. Update conversation timestamp
         self._db.execute(
             "UPDATE conversations SET updated_at = ? WHERE id = ?",
-            (_utc_now(), conversation_id),
+            (utc_now(), conversation_id),
         )

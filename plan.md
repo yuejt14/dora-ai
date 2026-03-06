@@ -2,6 +2,7 @@
 
 ## Current State
 
+- Phase 2.1 complete: SoulDefinition + CharacterState + SessionState models, default.yaml, souls migration, 53 new tests (74 total)
 - Phase 1.4 complete: pytest + pytest-asyncio, 21 unit tests across all Phase 1 modules
 - Phase 1.3 complete: Provider + DB integration, asyncio bridge, conversation pipeline, CLI chat loop
 - Phase 1.2 complete: SQLite database layer with migrations, query helpers, WAL mode
@@ -57,10 +58,10 @@
 
 ### 2.1 Definition + State Models
 
-- [ ] `backend/soul/definition.py` — `SoulDefinition` Pydantic model + YAML loader (install `pyyaml`)
-- [ ] `backend/soul/state.py` — `CharacterState` (persistent, SQLite) + `SessionState` (volatile, in-memory) + supporting models (`MoodSnapshot`, `FormedOpinion`, `RecordedMilestone`, `EmotionSnapshot`, `SentimentSnapshot`, `ConversationArc`, etc.)
-- [ ] `souls/default.yaml` — default companion personality (full schema: identity, traits, speaking style, voice, emotions, relationship stages, opinions, quirks, boundaries, spontaneity, initiative, growth gates, tag tier)
-- [ ] `backend/db/migrations/002_add_souls.sql` — `souls` table (YAML cache + hash for change detection) + `character_state` table (single JSON blob) + single-active-soul trigger
+- [x] `backend/soul/definition.py` — `SoulDefinition` Pydantic model + YAML loader (install `pyyaml`)
+- [x] `backend/soul/state.py` — `CharacterState` (persistent, SQLite) + `SessionState` (volatile, in-memory) + supporting models (`MoodSnapshot`, `FormedOpinion`, `RecordedMilestone`, `EmotionSnapshot`, `SentimentSnapshot`, `ConversationArc`, etc.)
+- [x] `souls/default.yaml` — default companion personality (full schema: identity, traits, speaking style, voice, emotions, relationship stages, opinions, quirks, boundaries, spontaneity, initiative, growth gates, tag tier)
+- [x] `backend/db/migrations/002_add_souls.sql` — `souls` table (YAML cache + hash for change detection) + `character_state` table (single JSON blob) + single-active-soul triggers (INSERT + UPDATE)
 
 ### 2.2 Tag Parser + Emotion Classifier
 
