@@ -53,17 +53,69 @@
 
 ## Phase 2 — Soul Engine
 
-**Goal:** Personality-driven responses via a middleware pipeline.
+**Goal:** Personality-driven responses with emotional fluidity, character growth, proactive behavior, and controlled unpredictability. See `docs/soul-engine.md` for full design.
+
+### 2.1 Definition + State Models
 
 - [ ] `backend/soul/definition.py` — `SoulDefinition` Pydantic model + YAML loader (install `pyyaml`)
-- [ ] `souls/default.yaml` — default companion personality
-- [ ] `backend/db/migrations/002_add_souls.sql` — `souls` table (caches YAML definitions, re-scanned on startup)
-- [ ] `backend/soul/engine.py` — `SoulEngine` pre/post processing:
-  - Pre: inject system prompt + conversation history
-  - Post: streaming emotion tag parser (handles split tags across chunks, defaults to `neutral`), enforce response constraints
-- [ ] `backend/soul/pipeline.py` — `ConversationPipeline` orchestrator tying providers + DB + soul together
-- [ ] CLI test: personality-flavored streamed responses with emotion tags parsed out
-- [ ] Unit tests for emotion tag parser (split tags, missing tags, malformed tags, multiple tags per chunk)
+- [ ] `backend/soul/state.py` — `CharacterState` (persistent, SQLite) + `SessionState` (volatile, in-memory) + supporting models (`MoodSnapshot`, `FormedOpinion`, `RecordedMilestone`, `EmotionSnapshot`, `ConversationArc`, etc.)
+- [ ] `souls/default.yaml` — default companion personality (full schema: identity, traits, speaking style, voice, emotions, relationship stages, opinions, quirks, boundaries, spontaneity, initiative, growth gates, tag tier)
+- [ ] `backend/db/migrations/002_add_souls.sql` — `souls` table (YAML cache + hash for change detection) + `character_state` table (single JSON blob) + single-active-soul trigger
+
+### 2.2 Tag Parser
+
+- [ ] `backend/soul/tag_parser.py` — stateful streaming tag parser with `StreamEvent` types (`TextEvent`, `EmotionEvent`, `MoodEvent`, `ActionEvent`, `ThoughtEvent`)
+  - Handles tags split across chunks (buffers on `[` until `]`)
+  - Flushes as plain text if buffer exceeds 80 chars
+  - Three tag tiers: `minimal` (7B), `standard` (13B+), `full` (Claude/GPT-4)
+  - Defaults to neutral emotion when no tags emitted
+- [ ] Unit tests for tag parser (split tags, missing tags, malformed tags, all event types, tier filtering)
+
+### 2.3 Prompt Builder + Arc Tracker
+
+- [ ] `backend/soul/prompt_builder.py` — compresses SoulDefinition + CharacterState + SessionState + memories into a 500-1500 token natural-language system prompt. Caches static sections, rebuilds dynamic sections (emotional context, arc, wildcards) per-turn.
+- [ ] `backend/soul/arc.py` — conversation arc tracker: rule-based phase detection (opening/exploring/deepening/winding_down), energy level computation, lightweight topic extraction (regex, not LLM), callback candidate collection
+
+### 2.4 Soul Engine + Pipeline Integration
+
+- [ ] `backend/soul/engine.py` — `SoulEngine` with `pre_process()` and `post_process()`:
+  - Pre: update SessionState arc, build system prompt via PromptBuilder, assemble messages
+  - Post: pipe stream through TagParser, feed EmotionEvents back into SessionState (emotional inertia), mine ThoughtEvents for callbacks, update mood from MoodEvents
+  - Supports `soul_engine=None` for raw LLM fallback (Phase 1 backward compat)
+- [ ] Update `backend/conversation.py` — yield `StreamEvent`s instead of raw strings, increment turn count, hook for growth evaluation trigger
+- [ ] CLI test: personality-flavored streamed responses with emotion tags parsed out, emotional inertia carrying across turns
+
+### 2.5 Spontaneity System
+
+- [ ] Spontaneity integration in PromptBuilder — per-turn probability roll against spontaneity trait, wildcard injection with cooldown. Types: tangent, callback, provocation, non_sequitur, vulnerability. Spontaneity is a mutable trait (drifts via growth system).
+
+### 2.6 Growth Evaluator
+
+- [ ] `backend/soul/growth.py` — `GrowthEvaluator`: async, batched, never blocks chat
+  - Rule-based gates: min_turns + min_hours since last evaluation
+  - LLM reflection prompt with recent messages + current state
+  - Structured JSON response: trait adjustments, new opinions, milestones, mood shift, relationship stage, running gags, developed interests
+  - Python enforces all bounds (drift rate caps magnitude, min/max clamps values)
+- [ ] Unit tests for bounds enforcement (drift rate clamping, min/max, stage advancement)
+
+### 2.7 Initiative Scheduler
+
+- [ ] `backend/soul/initiative.py` — `InitiativeScheduler`: timer-driven (30s check interval), runs on async bridge thread
+  - Silence triggers (configurable thresholds, mood-filtered)
+  - Context triggers (first_session_of_day, returned_after_absence, follow_up_thought)
+  - Rate limited (max_per_hour), respects DND setting
+  - Sends through same pipeline path, frontend shows as `initiative_message`
+  - LLM can decline to speak (empty response suppressed)
+- [ ] CLI test: silence trigger fires after idle period, initiative message appears
+
+### 2.8 Tests
+
+- [ ] Unit tests for SoulDefinition YAML loading + validation
+- [ ] Unit tests for CharacterState serialization, effective_trait, mood decay
+- [ ] Unit tests for SessionState emotional inertia calculation
+- [ ] Unit tests for arc phase detection heuristics
+- [ ] Unit tests for GrowthEvaluator bounds enforcement
+- [ ] Integration test: multi-turn conversation with personality, emotions carrying across turns
 
 ---
 

@@ -11,3 +11,12 @@ wheels/
 
 # Environment variables
 .env
+
+# SQLite database files
+data/
+
+# Test cache
+.pytest_cache/
+
+# Ruff cache
+.ruff_cache/

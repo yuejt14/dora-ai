@@ -21,7 +21,12 @@ pywebview (native desktop window)
 │   └── Zustand stores (chatStore, characterStore, settingsStore, voiceStore)
 │
 └── Python backend (runs in pywebview process, no server)
-    ├── SoulEngine — personality middleware (pre/post processes LLM calls)
+    ├── SoulEngine — personality middleware (3 state layers, pre/post processes LLM calls)
+    │   ├── SoulDefinition (YAML) + CharacterState (SQLite) + SessionState (volatile)
+    │   ├── PromptBuilder — compresses all layers into system prompt
+    │   ├── TagParser — streaming emotion/action/mood/thought tag extraction
+    │   ├── GrowthEvaluator — async batched personality evolution
+    │   └── InitiativeScheduler — timer-driven proactive messages
     ├── ProviderRouter — abstracts Ollama / Claude / OpenAI
     ├── MemoryManager — SQLite + sqlite-vec for persistent memory + vector search
     ├── VoicePipeline — faster-whisper (STT), Silero VAD, ElevenLabs/Piper (TTS)
@@ -32,13 +37,13 @@ There is NO FastAPI, NO Flask, NO WebSocket server. pywebview's JS bridge is the
 
 ### Core Concepts
 
-- **Soul Engine:** NOT just a system prompt — a middleware pipeline. Pre-processing builds the full prompt (system prompt + memories + history + user message). Post-processing extracts `[emotion:NAME]` tags from the LLM stream and yields clean text + emotion events separately. Soul definitions are YAML files in `souls/`.
+- **Soul Engine:** NOT just a system prompt — a multi-layered personality system with three temporal scales. **Permanent** (SoulDefinition from YAML — identity, traits, style, emotions, voice, relationship stages, spontaneity, initiative rules, growth bounds). **Persistent** (CharacterState in SQLite — trait drift values, relationship stage, formed opinions, mood with time-decay, milestones). **Session** (SessionState in-memory — emotion trail with inertia, conversation arc tracking, topic/callback tracking, spontaneity cooldowns). Pre-processing compresses all three layers into a system prompt via PromptBuilder. Post-processing extracts `[emotion:NAME intensity:FLOAT]`, `[mood:NAME]`, `[action:*desc*]`, `[thought:text]` tags (tier-adapted for model capability) and feeds emotions back into SessionState for cross-turn continuity. Includes GrowthEvaluator (async batched personality evolution), InitiativeScheduler (proactive AI-initiated messages), and spontaneity system (controlled wildcard injections). See `docs/soul-engine.md` for full design. Soul definitions are YAML files in `souls/`.
 - **Provider Router:** All providers implement `stream_chat(messages) -> AsyncIterator[str]`. User picks provider in settings (Ollama, Claude, OpenAI-compatible).
 - **Memory System:** Two tiers — short-term (recent messages) and long-term (extracted facts with vector embeddings for semantic search). Extraction is batched, not per-turn.
 - **Voice Pipeline:** Mic → Silero VAD → faster-whisper STT → ConversationPipeline → TTS (ElevenLabs / Piper) → audio playback + lipsync.
 - **Character Display:** pixi-live2d-display in React. Python sends emotion events, frontend maps to Live2D expressions. Simpler v1: sprite sheet swapping on emotion events.
 
-See `docs/architecture.md` for detailed threading, streaming, and error handling design.
+See `docs/architecture.md` for threading, streaming, and error handling. See `docs/soul-engine.md` for the full soul engine design.
 
 ## Hard Rules
 
